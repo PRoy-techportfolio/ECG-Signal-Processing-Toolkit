@@ -1,1 +1,527 @@
+#### QRS width measurement  ####
 
+import numpy as np
+import statistics as st
+
+
+def detect_qrs_onset_offset(
+    r_peaks,
+    ecg_signal,
+    onset_window=40,
+    offset_window=50,
+):
+    """
+    Detect the QRS onset and offset for each detected R-peak.
+
+    Parameters
+    ----------
+    r_peaks : array-like
+        Sample indices of detected R-peaks.
+
+    ecg_signal : ndarray
+        Filtered ECG signal.
+
+    onset_window : int, optional
+        Number of samples to search before each R-peak.
+
+    offset_window : int, optional
+        Number of samples to search after each R-peak.
+
+    Returns
+    -------
+    qrs_onset : list
+        Sample indices of detected QRS onset.
+
+    qrs_offset : list
+        Sample indices of detected QRS offset.
+    """
+
+    signal_length = len(ecg_signal)
+
+    qrs_onset = []
+    qrs_offset = []
+
+    for r_peak in r_peaks:
+
+        # ----------------------------------------------------------
+        # QRS ONSET
+        # ----------------------------------------------------------
+
+        search_index = max(0, r_peak - onset_window)
+
+        if search_index == 0:
+            qrs_onset.append(0)
+
+        else:
+
+            previous = ecg_signal[search_index - 1]
+            current = ecg_signal[search_index]
+
+            count = 1
+
+            while (
+                current > previous
+                and (search_index - count - 1) >= 0
+            ):
+
+                current = ecg_signal[search_index - count]
+                previous = ecg_signal[search_index - count - 1]
+
+                count += 1
+
+            qrs_onset.append(max(0, search_index - count + 1))
+
+        # ----------------------------------------------------------
+        # QRS OFFSET
+        # ----------------------------------------------------------
+
+        search_index = min(
+            signal_length - 1,
+            r_peak + offset_window
+        )
+
+        if search_index >= signal_length - 1:
+
+            qrs_offset.append(signal_length - 1)
+
+        else:
+
+            current = ecg_signal[search_index]
+            next_sample = ecg_signal[search_index + 1]
+
+            count = 1
+
+            while (
+                current < next_sample
+                and (search_index + count + 1) < signal_length
+            ):
+
+                current = ecg_signal[search_index + count]
+                next_sample = ecg_signal[
+                    search_index + count + 1
+                ]
+
+                count += 1
+
+            qrs_offset.append(
+                min(signal_length - 1, search_index + count)
+            )
+
+    return qrs_onset, qrs_offset
+
+
+# ------------------------------------------------------------------
+
+
+def calculate_pr_reference(
+    r_peaks,
+    qrs_onset,
+    ecg_signal,
+    search_window=80,
+):
+    """
+    Estimate a PR baseline reference before each QRS onset.
+
+    Parameters
+    ----------
+    r_peaks : array-like
+        Detected R-peak locations.
+
+    qrs_onset : array-like
+        QRS onset locations.
+
+    ecg_signal : ndarray
+        Filtered ECG signal.
+
+    search_window : int
+        Samples before the R-peak used for averaging.
+
+    Returns
+    -------
+    reference_locations : ndarray
+
+    pr_reference : ndarray
+    """
+
+    reference_locations = np.asarray(r_peaks) - search_window
+
+    pr_reference = np.zeros(len(r_peaks))
+
+    for i in range(len(r_peaks)):
+
+        start = max(0, reference_locations[i])
+
+        pr_reference[i] = np.mean(
+            ecg_signal[start:qrs_onset[i]]
+        )
+
+    return reference_locations, pr_reference
+
+
+# ------------------------------------------------------------------
+
+
+def calculate_pr_mode(pr_reference):
+    """
+    Compute the statistical mode of the PR reference values.
+    """
+
+    return st.mode(pr_reference)
+
+
+# ------------------------------------------------------------------
+
+
+def refine_qrs_boundaries(
+    r_peaks,
+    ecg_signal,
+    mode_value,
+    onset_window=40,
+    offset_window=50,
+    local_window=80,
+):
+    """
+    Refine QRS onset and offset using local signal statistics.
+
+    Parameters
+    ----------
+    r_peaks : array-like
+        Detected R-peak indices.
+
+    ecg_signal : ndarray
+        Filtered ECG signal.
+
+    mode_value : float
+        Global PR reference statistic.
+        (Currently local median is used.)
+
+    Returns
+    -------
+    refined_onset : list
+
+    refined_offset : list
+    """
+
+    signal_length = len(ecg_signal)
+
+    refined_onset = []
+    refined_offset = []
+
+    # ----------------------------------------------------------
+    # Refine QRS Onset
+    # ----------------------------------------------------------
+
+    for r_peak in r_peaks:
+
+        search_index = max(0, r_peak - onset_window)
+
+        current = ecg_signal[search_index]
+        previous = ecg_signal[search_index - 1]
+
+        count = 1
+
+        local_median = np.median(
+            ecg_signal[
+                max(0, search_index - local_window):
+                search_index
+            ]
+        )
+
+        while (
+            current > previous > local_median
+            and (search_index - count - 1) >= 0
+        ):
+
+            current = ecg_signal[search_index - count]
+            previous = ecg_signal[
+                search_index - count - 1
+            ]
+
+            count += 1
+
+        refined_onset.append(
+            max(0, search_index - count + 1)
+        )
+
+    # ----------------------------------------------------------
+    # Refine QRS Offset
+    # ----------------------------------------------------------
+
+    for r_peak in r_peaks:
+
+        search_index = min(
+            signal_length - 1,
+            r_peak + offset_window
+        )
+
+        current = ecg_signal[search_index]
+        next_sample = ecg_signal[
+            min(signal_length - 1, search_index + 1)
+        ]
+
+        count = 1
+
+        local_median = np.median(
+            ecg_signal[
+                search_index:
+                min(signal_length, search_index + local_window)
+            ]
+        )
+
+        while (
+            current < next_sample < local_median
+            and (search_index + count + 1) < signal_length
+        ):
+
+            current = ecg_signal[
+                search_index + count
+            ]
+
+            next_sample = ecg_signal[
+                search_index + count + 1
+            ]
+
+            count += 1
+
+        refined_offset.append(
+            min(
+                signal_length - 1,
+                search_index + count - 1,
+            )
+        )
+
+    return refined_onset, refined_offset
+
+
+
+###### P detection #######
+
+import numpy as np
+from scipy import signal
+
+
+def filter_p_wave(ecg_signal, fs=1000):
+    """
+    Filter an ECG signal for P-wave analysis.
+
+    The preprocessing pipeline includes:
+    - 50 Hz powerline suppression
+    - Low-pass filtering
+    - Savitzky-Golay smoothing
+    - Median filtering for baseline estimation
+
+    Parameters
+    ----------
+    ecg_signal : ndarray
+        Input ECG signal.
+
+    fs : int, optional
+        Sampling frequency (Hz).
+
+    Returns
+    -------
+    ndarray
+        Filtered ECG signal suitable for P-wave detection.
+    """
+
+    # -------------------------------------------------------------
+    # Powerline Filter Design
+    # -------------------------------------------------------------
+    powerline_freq = 50
+    harmonic_freq = 100
+
+    r = 1 - ((2 * np.pi) / fs)
+
+    w0 = (2 * np.pi * powerline_freq) / fs
+    w1 = (2 * np.pi * harmonic_freq) / fs
+
+    notch_50_b = [1, -2 * np.cos(w0), 1]
+    notch_50_a = [1, -2 * r * np.cos(w0), r**2]
+
+    notch_100_b = [1, -2 * np.cos(w1), 1]
+    notch_100_a = [1, -2 * r * np.cos(w1), r**2]
+
+    # -------------------------------------------------------------
+    # Filtering
+    # -------------------------------------------------------------
+    filtered = signal.lfilter(notch_50_b, notch_50_a, ecg_signal)
+    filtered = signal.lfilter(notch_100_b, notch_100_a, filtered)
+
+    b_lp, a_lp = signal.butter(
+        4,
+        40,
+        fs=fs,
+        btype="low"
+    )
+
+    filtered = signal.lfilter(b_lp, a_lp, filtered)
+
+    # -------------------------------------------------------------
+    # Signal Smoothing
+    # -------------------------------------------------------------
+    filtered = signal.savgol_filter(
+        filtered,
+        window_length=19,
+        polyorder=3,
+    )
+
+    filtered = signal.medfilt(
+        filtered,
+        kernel_size=41,
+    )
+
+    return filtered
+
+
+# =====================================================================
+
+
+def detect_p_wave(ecg_signal, qrs_onset):
+    """
+    Detect P-wave peak and onset.
+
+    Parameters
+    ----------
+    ecg_signal : ndarray
+        Input ECG signal.
+
+    qrs_onset : array-like
+        Detected QRS onset locations.
+
+    Returns
+    -------
+    p_locations : ndarray
+        Sample indices of detected P-peaks.
+
+    p_amplitudes : ndarray
+        P-wave amplitudes.
+
+    p_onsets : ndarray
+        Sample indices of P-wave onset.
+    """
+
+    filtered_ecg = filter_p_wave(ecg_signal)
+
+    p_locations = []
+    p_amplitudes = []
+    p_onsets = []
+
+    for onset in qrs_onset:
+
+        # ---------------------------------------------------------
+        # Search Region
+        # ---------------------------------------------------------
+        start = max(0, onset - 250)
+        end = max(start + 80, onset - 20)
+
+        segment = filtered_ecg[start:end]
+
+        if len(segment) < 60:
+
+            p_locations.append(np.nan)
+            p_amplitudes.append(np.nan)
+            p_onsets.append(np.nan)
+            continue
+
+        # ---------------------------------------------------------
+        # Peak Detection
+        # ---------------------------------------------------------
+        peaks, _ = signal.find_peaks(
+            segment,
+            prominence=0.015,
+            width=8,
+            distance=20,
+        )
+
+        if len(peaks) == 0:
+
+            p_locations.append(np.nan)
+            p_amplitudes.append(np.nan)
+            p_onsets.append(np.nan)
+            continue
+
+        candidate_peak = peaks[-1]
+
+        if (len(segment) - candidate_peak) < 15:
+
+            p_locations.append(np.nan)
+            p_amplitudes.append(np.nan)
+            p_onsets.append(np.nan)
+            continue
+
+        # ---------------------------------------------------------
+        # Baseline Estimation
+        # ---------------------------------------------------------
+        baseline = np.median(
+            segment[
+                max(0, candidate_peak - 80):
+                max(1, candidate_peak - 40)
+            ]
+        )
+
+        # ---------------------------------------------------------
+        # Onset Detection
+        # ---------------------------------------------------------
+        onset_index = candidate_peak
+        flat_samples = 0
+
+        while onset_index > 5:
+
+            slope = (
+                segment[onset_index]
+                - segment[onset_index - 1]
+            )
+
+            if (
+                abs(slope) < 0.0015
+                and abs(segment[onset_index] - baseline) < 0.01
+            ):
+                flat_samples += 1
+            else:
+                flat_samples = 0
+
+            if flat_samples >= 4:
+                break
+
+            onset_index -= 1
+
+        # ---------------------------------------------------------
+        # Peak Refinement
+        # ---------------------------------------------------------
+        left = max(0, candidate_peak - 4)
+        right = min(len(segment), candidate_peak + 5)
+
+        candidate_peak = left + np.argmax(
+            segment[left:right]
+        )
+
+        # ---------------------------------------------------------
+        # Physiological Validation
+        # ---------------------------------------------------------
+        amplitude = segment[candidate_peak] - baseline
+        width = candidate_peak - onset_index
+
+        if amplitude < 0.03:
+            p_locations.append(np.nan)
+            p_amplitudes.append(np.nan)
+            p_onsets.append(np.nan)
+            continue
+
+        if width < 10 or width > 120:
+            p_locations.append(np.nan)
+            p_amplitudes.append(np.nan)
+            p_onsets.append(np.nan)
+            continue
+
+        # ---------------------------------------------------------
+        # Save Results
+        # ---------------------------------------------------------
+        p_locations.append(start + candidate_peak)
+        p_amplitudes.append(segment[candidate_peak])
+        p_onsets.append(start + onset_index)
+
+    return (
+        np.asarray(p_locations),
+        np.asarray(p_amplitudes),
+        np.asarray(p_onsets),
+    )
