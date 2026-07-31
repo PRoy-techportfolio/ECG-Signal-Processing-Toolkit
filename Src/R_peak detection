@@ -1,1 +1,173 @@
+###### R peak Detection function    #######
 
+import numpy as np
+from scipy import signal
+import statistics as st
+
+
+def detect_r_peaks(ecg_signal, fs=1000):
+    """
+    Detect R-peaks and S-peaks from an ECG signal.
+
+    The algorithm performs:
+    1. Baseline wander removal
+    2. Low-pass filtering
+    3. Differentiation and squaring
+    4. Peak detection
+    5. R-peak localization
+    6. S-peak localization
+    7. Identification of long RR intervals (possible ectopic beats)
+
+    Parameters
+    ----------
+    ecg_signal : numpy.ndarray
+        Input ECG signal.
+
+    fs : int, optional
+        Sampling frequency in Hz.
+        Default is 1000 Hz.
+
+    Returns
+    -------
+    r_peaks : list
+        Sample indices of detected R-peaks.
+
+    ectopic_candidates : list
+        Sample indices of suspected ectopic beats.
+
+    r_peak_amplitudes : list
+        Amplitude of each detected R-peak.
+
+    s_peaks : list
+        Sample indices of detected S-peaks.
+    """
+
+    r_peaks = []
+    s_peaks = []
+    ectopic_candidates = []
+
+    # -------------------------------------------------------------
+    # Baseline Wander Removal
+    # -------------------------------------------------------------
+    fir_coeff = signal.firwin(
+        numtaps=1377,
+        cutoff=2,
+        fs=fs,
+        pass_zero=False,
+        window="hamming"
+    )
+
+    filtered = signal.filtfilt(fir_coeff, 1, ecg_signal)
+
+    # -------------------------------------------------------------
+    # Low-pass Filtering
+    # -------------------------------------------------------------
+    b_lp, a_lp = signal.butter(
+        N=4,
+        Wn=45,
+        fs=fs,
+        btype="low"
+    )
+
+    filtered = signal.lfilter(b_lp, a_lp, filtered)
+
+    # -------------------------------------------------------------
+    # Differentiate and Square
+    # -------------------------------------------------------------
+    differentiated = np.diff(filtered)
+    squared = differentiated ** 2
+
+    threshold = np.max(squared[1000:5000]) / 1.7
+
+    candidate_peaks, _ = signal.find_peaks(
+        squared,
+        distance=255,
+        height=threshold
+    )
+
+    search_window = 70
+
+    # -------------------------------------------------------------
+    # Locate R and S Peaks
+    # -------------------------------------------------------------
+    for peak in candidate_peaks:
+
+        start = max(0, peak - search_window)
+        end = min(len(filtered), peak + search_window)
+
+        segment = filtered[start:end]
+
+        # -------------------------
+        # R Peak
+        # -------------------------
+        positive_peaks, _ = signal.find_peaks(
+            segment,
+            distance=10,
+            height=np.max(segment) / 2
+        )
+
+        if len(positive_peaks) == 1:
+            r_index = start + positive_peaks[0]
+        else:
+            r_index = start + np.argmax(segment)
+
+        r_peaks.append(r_index)
+
+        # -------------------------
+        # S Peak
+        # -------------------------
+        inverted = -segment
+
+        negative_peaks, _ = signal.find_peaks(
+            inverted,
+            distance=10
+        )
+
+        if len(negative_peaks) == 1:
+            s_index = start + negative_peaks[0]
+        else:
+            s_index = start + np.argmax(inverted)
+
+        s_peaks.append(s_index)
+
+    # -------------------------------------------------------------
+    # RR Interval Analysis
+    # -------------------------------------------------------------
+    rr_intervals = np.diff(r_peaks)
+
+    if len(rr_intervals) > 0:
+
+        rr_threshold = st.mean(rr_intervals) * 1.1
+
+        for i, rr in enumerate(rr_intervals):
+
+            if rr > rr_threshold:
+
+                ectopic_segment = filtered[
+                    r_peaks[i] + 60 :
+                    r_peaks[i + 1] - 60
+                ]
+
+                if len(ectopic_segment) > 0:
+
+                    ectopic_index = (
+                        np.argmax(ectopic_segment ** 2)
+                        + r_peaks[i]
+                        + 60
+                    )
+
+                    ectopic_candidates.append(ectopic_index)
+
+    # -------------------------------------------------------------
+    # R Peak Amplitudes
+    # -------------------------------------------------------------
+    r_peak_amplitudes = [
+        filtered[index] for index in r_peaks
+    ]
+
+    return (
+        r_peaks,
+        ectopic_candidates,
+        r_peak_amplitudes,
+        s_peaks
+    )
