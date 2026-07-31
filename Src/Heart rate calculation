@@ -1,1 +1,74 @@
+###### Heart Rate Calculation ######
 
+import numpy as np
+
+
+def calculate_heart_rate(r_peaks, filtered_ecg, ecg_signal, fs=1000):
+    """
+    Calculate heart rate and RR intervals from detected R-peaks.
+
+    Parameters
+    ----------
+    r_peaks : list or numpy.ndarray
+        Sample indices of detected R-peaks.
+
+    filtered_ecg : numpy.ndarray
+        Filtered ECG signal used for R-peak detection.
+
+    ecg_signal : numpy.ndarray
+        ECG signal used for rhythm analysis.
+
+    fs : int, optional
+        Sampling frequency in Hz.
+        Default is 1000 Hz.
+
+    Returns
+    -------
+    heart_rate : int
+        Estimated heart rate in beats per minute (BPM).
+
+    average_rr : float
+        Mean RR interval in samples.
+
+    rr_intervals : numpy.ndarray
+        RR intervals in samples.
+
+    r_peak_amplitudes : list
+        Amplitudes of detected R-peaks.
+
+    rhythm : str
+        Rhythm classification returned by Rhythm_Check().
+    """
+
+    # -------------------------------------------------------------
+    # RR Interval Calculation
+    # -------------------------------------------------------------
+    rr_intervals = np.diff(r_peaks)
+
+    # -------------------------------------------------------------
+    # R-Peak Amplitudes
+    # -------------------------------------------------------------
+    r_peak_amplitudes = [filtered_ecg[index] for index in r_peaks]
+
+    # -------------------------------------------------------------
+    # Average RR Interval
+    # -------------------------------------------------------------
+    average_rr = np.mean(rr_intervals)
+
+    # -------------------------------------------------------------
+    # Heart Rate Calculation
+    # -------------------------------------------------------------
+    heart_rate = int((60 * fs) / average_rr)
+
+    # -------------------------------------------------------------
+    # Rhythm Classification
+    # -------------------------------------------------------------
+    rhythm = Rhythm_Check(ecg_signal)
+
+    return (
+        heart_rate,
+        average_rr,
+        rr_intervals,
+        r_peak_amplitudes,
+        rhythm,
+    )
